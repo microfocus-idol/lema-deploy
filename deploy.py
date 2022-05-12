@@ -12,12 +12,12 @@
 # information contained herein is subject to change without notice.
 #
 
-import textwrap
-import sys
+import argparse
 import os
 import shutil
 import subprocess
-import argparse
+import sys
+import textwrap
 
 COMPONENT_DEFAULT = object()
 COMPONENTS = [
@@ -116,27 +116,43 @@ def get_compose_paths(components):
             yield path
 
 
-def run_compose(docker_host, components, config_path, detach=True, remove=False, log_level='info'):
+def get_compose_args(docker_host, components, config_path, log_level='info'):
     # base should be first
     components = ['base'] + list(components)
 
-    compose_args = ['docker-compose']
-    compose_args.extend(['--log-level', log_level])
+    args = ['docker-compose']
+    args.extend(['--log-level', log_level])
     if docker_host is not None:
-        compose_args.extend(['--host', docker_host])
+        args.extend(['--host', docker_host])
     env_paths = list(get_env_paths(components)) + ([] if config_path is None else [config_path])
-    compose_args.extend(['--env-file', build_env_file(env_paths)])
+    args.extend(['--env-file', build_env_file(env_paths)])
+
     for compose_path in get_compose_paths(components):
-        compose_args.extend(['--file', compose_path])
+        args.extend(['--file', compose_path])
+    return args
 
-    subprocess.check_call(compose_args + ['pull'])
 
-    up_args = ['up']
+def run_compose(docker_host, components, config_path, detach=True, remove=False, log_level='info'):
+    components = list(components)
+    subprocess.check_call(
+        get_compose_args(docker_host, components, config_path, log_level) + ['pull'])
+
+    if remove:
+        # components we're not starting will be forcefully removed when starting so we ensure
+        # they're stopped more gracefully here
+        # use symmetric_difference so we retain 'modifier' components such as `unencrypted`
+        stop_components = (
+            {c for c in COMPONENTS if c is not COMPONENT_DEFAULT}
+        ).symmetric_difference(components)
+        subprocess.check_call(
+            get_compose_args(docker_host, stop_components, config_path, log_level) + ['stop'])
+
+    up_args = get_compose_args(docker_host, components, config_path, log_level) + ['up']
     if detach:
         up_args.append('--detach')
     if remove:
         up_args.append('--remove-orphans')
-    subprocess.check_call(compose_args + up_args)
+    subprocess.check_call(up_args)
 
 
 def deploy(docker_host, components, config_path, disable_encryption):
